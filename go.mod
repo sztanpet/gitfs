@@ -1,3 +1,3 @@
-module rsc.io/gitfs
+module github.com/sztanpet/gitfs
 
-go 1.21.0
+go 1.22.5

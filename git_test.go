@@ -5,8 +5,9 @@
 package gitfs
 
 import (
+	"context"
 	"io/fs"
-	"io/ioutil"
+	"os"
 	"testing"
 )
 
@@ -14,11 +15,11 @@ func TestGerrit(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping Gerrit network access in -short mode")
 	}
-	r, err := NewRepo("https://go.googlesource.com/scratch")
+	r, err := NewRepo(context.Background(), "https://go.googlesource.com/scratch")
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, fsys, err := r.Clone("HEAD")
+	_, fsys, err := r.Clone(context.Background(), "HEAD")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -33,11 +34,11 @@ func TestGitHub(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping GitHub network access in -short mode")
 	}
-	r, err := NewRepo("https://github.com/rsc/quote")
+	r, err := NewRepo(context.Background(), "https://github.com/rsc/quote")
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, fsys, err := r.Clone("HEAD")
+	_, fsys, err := r.Clone(context.Background(), "HEAD")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -49,7 +50,7 @@ func TestGitHub(t *testing.T) {
 }
 
 func TestPack(t *testing.T) {
-	data, err := ioutil.ReadFile("testdata/scratch.pack")
+	data, err := os.ReadFile("testdata/scratch.pack")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -7,11 +7,11 @@ package gitfs
 
 import (
 	"bytes"
+	"context"
 	"encoding/hex"
 	"fmt"
 	"io"
 	"io/fs"
-	"io/ioutil"
 	"net/http"
 	"strings"
 )
@@ -23,9 +23,9 @@ type Repo struct {
 }
 
 // NewRepo connects to a Git repository at the given http:// or https:// URL.
-func NewRepo(url string) (*Repo, error) {
+func NewRepo(ctx context.Context, url string) (*Repo, error) {
 	r := &Repo{url: strings.TrimSuffix(url, "/")}
-	if err := r.handshake(); err != nil {
+	if err := r.handshake(ctx); err != nil {
 		return nil, err
 	}
 	return r, nil
@@ -33,16 +33,17 @@ func NewRepo(url string) (*Repo, error) {
 
 // handshake runs the initial Git opening handshake, learning the capabilities of the server.
 // See https://git-scm.com/docs/protocol-v2#_initial_client_request.
-func (r *Repo) handshake() error {
+func (r *Repo) handshake(ctx context.Context) error {
 	req, _ := http.NewRequest("GET", r.url+"/info/refs?service=git-upload-pack", nil)
 	req.Header.Set("Accept", "*/*")
 	req.Header.Set("Git-Protocol", "version=2")
+	req = req.Clone(ctx)
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("handshake: %v", err)
 	}
-	data, err := ioutil.ReadAll(resp.Body)
+	data, err := io.ReadAll(resp.Body)
 	if resp.StatusCode != 200 {
 		return fmt.Errorf("handshake: %v\n%s", resp.Status, data)
 	}
@@ -74,7 +75,7 @@ func (r *Repo) handshake() error {
 }
 
 // Resolve looks up the given ref and returns the corresponding Hash.
-func (r *Repo) Resolve(ref string) (Hash, error) {
+func (r *Repo) Resolve(ctx context.Context, ref string) (Hash, error) {
 	if h, err := parseHash(ref); err == nil {
 		return h, nil
 	}
@@ -82,7 +83,7 @@ func (r *Repo) Resolve(ref string) (Hash, error) {
 	fail := func(err error) (Hash, error) {
 		return Hash{}, fmt.Errorf("resolve %s: %v", ref, err)
 	}
-	refs, err := r.refs(ref)
+	refs, err := r.refs(ctx, ref)
 	if err != nil {
 		return fail(err)
 	}
@@ -103,7 +104,7 @@ type ref struct {
 // refs executes an ls-refs command on the remote server
 // to look up refs with the given prefixes.
 // See https://git-scm.com/docs/protocol-v2#_ls_refs.
-func (r *Repo) refs(prefixes ...string) ([]ref, error) {
+func (r *Repo) refs(ctx context.Context, prefixes ...string) ([]ref, error) {
 	if _, ok := r.caps["ls-refs"]; !ok {
 		return nil, fmt.Errorf("refs: server does not support ls-refs")
 	}
@@ -124,13 +125,14 @@ func (r *Repo) refs(prefixes ...string) ([]ref, error) {
 	req.Header.Set("Content-Type", "application/x-git-upload-pack-request")
 	req.Header.Set("Accept", "application/x-git-upload-pack-result")
 	req.Header.Set("Git-Protocol", "version=2")
+	req = req.Clone(ctx)
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("refs: %v", err)
 	}
 	defer resp.Body.Close()
-	data, err := ioutil.ReadAll(resp.Body)
+	data, err := io.ReadAll(resp.Body)
 	if resp.StatusCode != 200 {
 		return nil, fmt.Errorf("refs: %v\n%s", resp.Status, data)
 	}
@@ -162,15 +164,15 @@ func (r *Repo) refs(prefixes ...string) ([]ref, error) {
 }
 
 // Clone resolves the given ref to a hash and returns the corresponding fs.FS.
-func (r *Repo) Clone(ref string) (Hash, fs.FS, error) {
+func (r *Repo) Clone(ctx context.Context, ref string) (Hash, fs.FS, error) {
 	fail := func(err error) (Hash, fs.FS, error) {
 		return Hash{}, nil, fmt.Errorf("clone %s: %v", ref, err)
 	}
-	h, err := r.Resolve(ref)
+	h, err := r.Resolve(ctx, ref)
 	if err != nil {
 		return fail(err)
 	}
-	tfs, err := r.fetch(h)
+	tfs, err := r.fetch(ctx, h)
 	if err != nil {
 		return fail(err)
 	}
@@ -178,8 +180,8 @@ func (r *Repo) Clone(ref string) (Hash, fs.FS, error) {
 }
 
 // CloneHash returns the fs.FS for the given hash.
-func (r *Repo) CloneHash(h Hash) (fs.FS, error) {
-	tfs, err := r.fetch(h)
+func (r *Repo) CloneHash(ctx context.Context, h Hash) (fs.FS, error) {
+	tfs, err := r.fetch(ctx, h)
 	if err != nil {
 		return nil, fmt.Errorf("clone %s: %v", h, err)
 	}
@@ -187,7 +189,7 @@ func (r *Repo) CloneHash(h Hash) (fs.FS, error) {
 }
 
 // fetch returns the fs.FS for a given hash.
-func (r *Repo) fetch(h Hash) (fs.FS, error) {
+func (r *Repo) fetch(ctx context.Context, h Hash) (fs.FS, error) {
 	// Fetch a shallow packfile from the remote server.
 	// Shallow means it only contains the tree at that one commit,
 	// not the entire history of the repo.
@@ -215,6 +217,7 @@ func (r *Repo) fetch(h Hash) (fs.FS, error) {
 	req.Header.Set("Content-Type", "application/x-git-upload-pack-request")
 	req.Header.Set("Accept", "application/x-git-upload-pack-result")
 	req.Header.Set("Git-Protocol", "version=2")
+	req = req.Clone(ctx)
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -222,7 +225,7 @@ func (r *Repo) fetch(h Hash) (fs.FS, error) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
-		data, _ := ioutil.ReadAll(resp.Body)
+		data, _ := io.ReadAll(resp.Body)
 		return nil, fmt.Errorf("fetch: %v\n%s\n%s", resp.Status, data, hex.Dump(postbody))
 	}
 	if ct := resp.Header.Get("Content-Type"); ct != "application/x-git-upload-pack-result" {
@@ -256,15 +259,15 @@ func (r *Repo) fetch(h Hash) (fs.FS, error) {
 			continue
 		}
 		if len(line) == 0 || line[0] == 0 || line[0] > 3 {
-			fmt.Printf("%q\n", line)
+			// sideband message that is out of spec, ignore it for now
 			continue
-			return nil, fmt.Errorf("fetch: malformed response: invalid sideband: %q", line)
+
 		}
 		switch line[0] {
 		case 1:
 			data = append(data, line[1:]...)
 		case 2:
-			fmt.Printf("%s\n", line[1:])
+			// in-spec sideband message, ignore it for now
 		case 3:
 			return nil, fmt.Errorf("fetch: server error: %s", line[1:])
 		}
