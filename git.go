@@ -83,7 +83,7 @@ func (r *Repo) Resolve(ctx context.Context, ref string) (Hash, error) {
 	fail := func(err error) (Hash, error) {
 		return Hash{}, fmt.Errorf("resolve %s: %v", ref, err)
 	}
-	refs, err := r.refs(ctx, ref)
+	refs, err := r.Refs(ctx, ref)
 	if err != nil {
 		return fail(err)
 	}
@@ -101,10 +101,14 @@ type ref struct {
 	hash Hash   // hexadecimal hash
 }
 
-// refs executes an ls-refs command on the remote server
-// to look up refs with the given prefixes.
+func (r ref) Name() string {
+	return r.name
+}
+
+// Refs executes an ls-Refs command on the remote server
+// to look up Refs with the given prefixes.
 // See https://git-scm.com/docs/protocol-v2#_ls_refs.
-func (r *Repo) refs(ctx context.Context, prefixes ...string) ([]ref, error) {
+func (r *Repo) Refs(ctx context.Context, prefixes ...string) ([]ref, error) {
 	if _, ok := r.caps["ls-refs"]; !ok {
 		return nil, fmt.Errorf("refs: server does not support ls-refs")
 	}
